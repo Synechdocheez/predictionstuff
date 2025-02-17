@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Stock Data Forecast</title>
+  <title>Stock Data Forecast (No API Key)</title>
   <!-- Include Chart.js from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
@@ -45,10 +45,8 @@
   </div>
   
   <script>
-    // Global variable to hold the chart instance
-    let chart;
+    let chart; // Global variable for Chart.js instance
 
-    // Main function: fetch data, process, predict, and plot
     async function getStockData() {
       const ticker = document.getElementById('ticker').value.trim().toUpperCase();
       if (!ticker) {
@@ -56,37 +54,53 @@
         return;
       }
       
-      // Replace with your own Alpha Vantage API key
-      const API_KEY = 'YOUR_API_KEY';
-      const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&apikey=${API_KEY}`;
+      // Yahoo Finance endpoint (no API key required)
+      // Note: If you run into CORS issues, try prepending the URL with a CORS proxy like:
+      // "https://cors-anywhere.herokuapp.com/"
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=3mo&interval=1d`;
       
       try {
         const response = await fetch(url);
         const data = await response.json();
         
-        // Check for errors in the API response
-        if (data["Error Message"]) {
-          alert("Error fetching data. Please check the ticker symbol.");
+        // Check if data is returned
+        if (!data.chart || !data.chart.result || data.chart.result.length === 0) {
+          alert("No data found for ticker: " + ticker);
           return;
         }
         
-        const timeSeries = data["Time Series (Daily)"];
-        if (!timeSeries) {
-          alert("No data found for this ticker.");
+        const result = data.chart.result[0];
+        const timestamps = result.timestamp;
+        const closePrices = result.indicators.quote[0].close;
+        
+        // Ensure data arrays are valid and of equal length
+        if (!timestamps || !closePrices || timestamps.length !== closePrices.length) {
+          alert("Data format error.");
           return;
         }
         
-        // Extract dates and closing prices; sort the dates in ascending order
-        const dates = Object.keys(timeSeries).sort();
-        const prices = dates.map(date => parseFloat(timeSeries[date]["4. close"]));
+        // Convert UNIX timestamps to date strings (YYYY-MM-DD)
+        const dates = timestamps.map(ts => {
+          const dateObj = new Date(ts * 1000);
+          const year = dateObj.getFullYear();
+          const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+          const day = dateObj.getDate().toString().padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        });
         
-        // Use the most recent 100 data points (if available) for prediction
+        // Filter out entries where close price is null
+        const validData = dates.map((d, i) => ({ date: d, price: closePrices[i] }))
+                               .filter(item => item.price !== null);
+        const validDates = validData.map(item => item.date);
+        const validPrices = validData.map(item => item.price);
+        
+        // Use the most recent 100 data points (or fewer if not available) for prediction
         const maxPoints = 100;
-        const recentDates = dates.slice(-maxPoints);
-        const recentPrices = prices.slice(-maxPoints);
+        const recentDates = validDates.slice(-maxPoints);
+        const recentPrices = validPrices.slice(-maxPoints);
+        const n = recentPrices.length;
         
-        // ----- Simple Linear Regression on recent data -----
-        let n = recentPrices.length;
+        // Simple Linear Regression on recent data
         let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
         for (let i = 0; i < n; i++) {
           sumX += i;
@@ -97,38 +111,33 @@
         const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
         const intercept = (sumY - slope * sumX) / n;
         
-        // ----- Forecast next 7 days -----
+        // Forecast next 7 days using the linear model
         const forecastCount = 7;
         const forecastData = [];
         const forecastDates = [];
-        const lastIndex = n - 1;
-        let lastDate = new Date(recentDates[recentDates.length - 1]);
-        
+        const lastDateObj = new Date(recentDates[recentDates.length - 1]);
         for (let i = 1; i <= forecastCount; i++) {
-          // Predicted price using linear regression model
-          let predictedPrice = slope * (lastIndex + i) + intercept;
+          // Predict price at point (n + i - 1)
+          const predictedPrice = slope * (n + i - 1) + intercept;
           forecastData.push(predictedPrice);
           
-          // For simplicity, add one day per prediction (weekend handling omitted)
-          let nextDate = new Date(lastDate);
-          nextDate.setDate(lastDate.getDate() + i);
-          let dd = nextDate.getDate().toString().padStart(2, '0');
-          let mm = (nextDate.getMonth() + 1).toString().padStart(2, '0');
-          let yyyy = nextDate.getFullYear();
-          forecastDates.push(`${yyyy}-${mm}-${dd}`);
+          // Increment date (weekend handling omitted for simplicity)
+          let nextDate = new Date(lastDateObj);
+          nextDate.setDate(lastDateObj.getDate() + i);
+          const year = nextDate.getFullYear();
+          const month = (nextDate.getMonth() + 1).toString().padStart(2, '0');
+          const day = nextDate.getDate().toString().padStart(2, '0');
+          forecastDates.push(`${year}-${month}-${day}`);
         }
         
-        // Prepare chart labels and datasets:
-        // - For the actual data, forecast parts will be null.
-        // - For the forecast series, actual parts will be null.
+        // Combine dates and datasets for Chart.js
         const chartLabels = [...recentDates, ...forecastDates];
         const actualData = [...recentPrices, ...Array(forecastCount).fill(null)];
         const forecastSeries = [...Array(recentPrices.length).fill(null), ...forecastData];
         
-        // ----- Plot the data using Chart.js -----
-        if (chart) {
-          chart.destroy();
-        }
+        // Destroy any existing chart instance before creating a new one
+        if (chart) chart.destroy();
+        
         const ctx = document.getElementById('stockChart').getContext('2d');
         chart = new Chart(ctx, {
           type: 'line',
@@ -188,7 +197,7 @@
         });
       } catch (error) {
         console.error(error);
-        alert("Error fetching or processing data.");
+        alert("Error fetching data. This might be due to CORS restrictions or an invalid ticker symbol.");
       }
     }
   </script>
