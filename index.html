@@ -1,214 +1,353 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Breakout Game</title>
+  <meta charset="UTF-8">
+  <title>Tile-Based Game</title>
   <style>
-    /* Basic reset & styling */
-    body {
-      background-color: #222;
-      color: #fff;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      text-align: center;
+    /* Basic reset and full-window layout */
+    body, html {
       margin: 0;
       padding: 0;
-      user-select: none;
+      overflow: hidden;
+      font-family: sans-serif;
     }
-    h1 {
-      margin-top: 20px;
-    }
-    #scoreboard {
-      font-size: 20px;
-      margin: 10px;
-    }
-    /* Canvas styling */
-    canvas {
-      background: #333;
+    /* The game canvas */
+    #gameCanvas {
       display: block;
-      margin: 20px auto;
-      border: 2px solid #fff;
+      background: #8BC34A; /* fallback green background */
+    }
+    /* Main menu overlay */
+    #mainMenu {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .button {
+      margin: 10px;
+      padding: 10px 20px;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    /* UI overlay (for coordinates and game buttons) */
+    #uiOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      z-index: 5;
+      pointer-events: none;
+    }
+    #playerCoords {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 5px;
+      pointer-events: auto;
+    }
+    #gameButtons {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      z-index: 6;
+      pointer-events: auto;
     }
   </style>
 </head>
 <body>
-  <h1>Breakout Game</h1>
-  <div id="scoreboard">Score: 0</div>
-  <canvas id="myCanvas" width="480" height="320"></canvas>
-
+  <!-- Main Menu -->
+  <div id="mainMenu">
+    <h1>Tile Game</h1>
+    <button id="newGameButton" class="button">New Game</button>
+    <button id="loadGameButton" class="button">Load Game</button>
+  </div>
+  <!-- The game canvas -->
+  <canvas id="gameCanvas" width="1280" height="720"></canvas>
+  <!-- UI overlay for coordinates and buttons -->
+  <div id="uiOverlay">
+    <div id="playerCoords">X: 0, Y: 0</div>
+    <div id="gameButtons">
+      <button id="saveButton" class="button">Save Game</button>
+      <button id="menuButton" class="button">Main Menu</button>
+    </div>
+  </div>
+  
   <script>
-    // Get canvas & context
-    const canvas = document.getElementById("myCanvas");
-    const ctx = canvas.getContext("2d");
+    // Get canvas and context
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
 
-    // Ball properties
-    let ballRadius = 10;
-    let x = canvas.width / 2;
-    let y = canvas.height - 30;
-    let dx = 2;
-    let dy = -2;
+    // Game constants
+    const TILE_SIZE = 40;
+    const WORLD_WIDTH = 50;   // tiles across
+    const WORLD_HEIGHT = 50;  // tiles down
+    const WORLD_PIXEL_WIDTH = WORLD_WIDTH * TILE_SIZE;
+    const WORLD_PIXEL_HEIGHT = WORLD_HEIGHT * TILE_SIZE;
 
-    // Paddle properties
-    let paddleHeight = 10;
-    let paddleWidth = 75;
-    let paddleX = (canvas.width - paddleWidth) / 2;
-    let rightPressed = false;
-    let leftPressed = false;
+    // Game state variables
+    let gameState = 'menu'; // "menu" or "playing"
+    let keys = {};
+    let lastTime = 0;
+    let enemySpawnTimer = 0;
+    const enemySpawnInterval = 3000; // spawn enemy every 3 seconds
 
-    // Brick properties
-    const brickRowCount = 5;
-    const brickColumnCount = 7;
-    const brickWidth = 55;
-    const brickHeight = 20;
-    const brickPadding = 10;
-    const brickOffsetTop = 30;
-    const brickOffsetLeft = 30;
-    let bricks = [];
-
-    // Score
-    let score = 0;
-    const scoreboard = document.getElementById("scoreboard");
-
-    // Initialize bricks array
-    for (let c = 0; c < brickColumnCount; c++) {
-      bricks[c] = [];
-      for (let r = 0; r < brickRowCount; r++) {
-        bricks[c][r] = { x: 0, y: 0, status: 1 };
+    // Player class
+    class Player {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 15;
+        this.speed = 3;
+        this.health = 100;
+        this.attackRange = 30;
+        this.attackCooldown = 0; // milliseconds
+      }
+      update(delta) {
+        let dx = 0, dy = 0;
+        if (keys['w'] || keys['ArrowUp']) dy -= 1;
+        if (keys['s'] || keys['ArrowDown']) dy += 1;
+        if (keys['a'] || keys['ArrowLeft']) dx -= 1;
+        if (keys['d'] || keys['ArrowRight']) dx += 1;
+        if (dx !== 0 || dy !== 0) {
+          let norm = Math.sqrt(dx * dx + dy * dy);
+          dx /= norm; dy /= norm;
+          this.x += dx * this.speed;
+          this.y += dy * this.speed;
+          // Keep player within world bounds
+          this.x = Math.max(this.radius, Math.min(WORLD_PIXEL_WIDTH - this.radius, this.x));
+          this.y = Math.max(this.radius, Math.min(WORLD_PIXEL_HEIGHT - this.radius, this.y));
+        }
+        if (this.attackCooldown > 0) {
+          this.attackCooldown -= delta;
+        }
+      }
+      attack() {
+        if (this.attackCooldown <= 0) {
+          this.attackCooldown = 500; // half-second cooldown
+          return true;
+        }
+        return false;
+      }
+      draw(ctx, offsetX, offsetY) {
+        ctx.fillStyle = 'red';
+        ctx.beginPath();
+        ctx.arc(this.x - offsetX, this.y - offsetY, this.radius, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
-    // Event listeners for key presses & mouse movement
-    document.addEventListener("keydown", keyDownHandler, false);
-    document.addEventListener("keyup", keyUpHandler, false);
-    document.addEventListener("mousemove", mouseMoveHandler, false);
-
-    function keyDownHandler(e) {
-      if (e.key === "Right" || e.key === "ArrowRight") {
-        rightPressed = true;
-      } else if (e.key === "Left" || e.key === "ArrowLeft") {
-        leftPressed = true;
+    // Enemy class
+    class Enemy {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 12;
+        this.speed = 1.5;
+        this.health = 30;
+      }
+      update(delta, player) {
+        // Move towards the player
+        let dx = player.x - this.x;
+        let dy = player.y - this.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 0) {
+          dx /= dist; dy /= dist;
+          this.x += dx * this.speed;
+          this.y += dy * this.speed;
+        }
+      }
+      draw(ctx, offsetX, offsetY) {
+        ctx.fillStyle = 'purple';
+        ctx.beginPath();
+        ctx.arc(this.x - offsetX, this.y - offsetY, this.radius, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
-    function keyUpHandler(e) {
-      if (e.key === "Right" || e.key === "ArrowRight") {
-        rightPressed = false;
-      } else if (e.key === "Left" || e.key === "ArrowLeft") {
-        leftPressed = false;
+    // World class: generates a grid of tiles with a bit of random variation
+    class World {
+      constructor() {
+        this.tiles = [];
+        for (let i = 0; i < WORLD_WIDTH; i++) {
+          this.tiles[i] = [];
+          for (let j = 0; j < WORLD_HEIGHT; j++) {
+            let grassShade = 150 + Math.floor(Math.random() * 50);
+            this.tiles[i][j] = `rgb(0, ${grassShade}, 0)`;
+          }
+        }
       }
-    }
-
-    function mouseMoveHandler(e) {
-      const relativeX = e.clientX - canvas.offsetLeft;
-      if (relativeX > 0 && relativeX < canvas.width) {
-        paddleX = relativeX - paddleWidth / 2;
-      }
-    }
-
-    // Draw the ball
-    function drawBall() {
-      ctx.beginPath();
-      ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
-      ctx.fillStyle = "#00ff00";
-      ctx.fill();
-      ctx.closePath();
-    }
-
-    // Draw the paddle
-    function drawPaddle() {
-      ctx.beginPath();
-      ctx.rect(paddleX, canvas.height - paddleHeight, paddleWidth, paddleHeight);
-      ctx.fillStyle = "#0095DD";
-      ctx.fill();
-      ctx.closePath();
-    }
-
-    // Draw the bricks
-    function drawBricks() {
-      for (let c = 0; c < brickColumnCount; c++) {
-        for (let r = 0; r < brickRowCount; r++) {
-          if (bricks[c][r].status === 1) {
-            let brickX = c * (brickWidth + brickPadding) + brickOffsetLeft;
-            let brickY = r * (brickHeight + brickPadding) + brickOffsetTop;
-            bricks[c][r].x = brickX;
-            bricks[c][r].y = brickY;
-            ctx.beginPath();
-            ctx.rect(brickX, brickY, brickWidth, brickHeight);
-            ctx.fillStyle = "#ff5733";
-            ctx.fill();
-            ctx.closePath();
+      draw(ctx, offsetX, offsetY) {
+        // Only draw visible tiles based on the camera offset
+        let startCol = Math.floor(offsetX / TILE_SIZE);
+        let endCol = Math.floor((offsetX + canvas.width) / TILE_SIZE);
+        let startRow = Math.floor(offsetY / TILE_SIZE);
+        let endRow = Math.floor((offsetY + canvas.height) / TILE_SIZE);
+        for (let i = startCol; i <= endCol; i++) {
+          for (let j = startRow; j <= endRow; j++) {
+            if (i < 0 || i >= WORLD_WIDTH || j < 0 || j >= WORLD_HEIGHT) continue;
+            ctx.fillStyle = this.tiles[i][j];
+            ctx.fillRect(i * TILE_SIZE - offsetX, j * TILE_SIZE - offsetY, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = 'black';
+            ctx.strokeRect(i * TILE_SIZE - offsetX, j * TILE_SIZE - offsetY, TILE_SIZE, TILE_SIZE);
           }
         }
       }
     }
 
-    // Collision detection between ball and bricks
-    function collisionDetection() {
-      for (let c = 0; c < brickColumnCount; c++) {
-        for (let r = 0; r < brickRowCount; r++) {
-          let b = bricks[c][r];
-          if (b.status === 1) {
-            if (
-              x > b.x &&
-              x < b.x + brickWidth &&
-              y > b.y &&
-              y < b.y + brickHeight
-            ) {
-              dy = -dy;
-              b.status = 0;
-              score++;
-              scoreboard.textContent = "Score: " + score;
-              if (score === brickRowCount * brickColumnCount) {
-                alert("Congratulations! You've cleared all the bricks!");
-                document.location.reload();
-              }
-            }
-          }
-        }
+    // Global game objects
+    let world, player, enemies;
+
+    // Start a new game
+    function newGame() {
+      world = new World();
+      player = new Player(WORLD_PIXEL_WIDTH / 2, WORLD_PIXEL_HEIGHT / 2);
+      enemies = [];
+      enemySpawnTimer = 0;
+      gameState = 'playing';
+      document.getElementById('mainMenu').style.display = 'none';
+    }
+
+    // Load game state from localStorage
+    function loadGame() {
+      const savedData = localStorage.getItem('tileGameSave');
+      if (savedData) {
+        const data = JSON.parse(savedData);
+        // Regenerate the world (for consistency, you could store a seed)
+        world = new World();
+        player = new Player(data.player.x, data.player.y);
+        player.health = data.player.health;
+        enemies = data.enemies.map(e => {
+          let enemy = new Enemy(e.x, e.y);
+          enemy.health = e.health;
+          return enemy;
+        });
+        enemySpawnTimer = 0;
+        gameState = 'playing';
+        document.getElementById('mainMenu').style.display = 'none';
+      } else {
+        alert("No saved game found!");
       }
     }
 
-    // Main draw function (game loop)
+    // Save game state to localStorage
+    function saveGame() {
+      const data = {
+        player: {
+          x: player.x,
+          y: player.y,
+          health: player.health
+        },
+        enemies: enemies.map(e => ({ x: e.x, y: e.y, health: e.health }))
+      };
+      localStorage.setItem('tileGameSave', JSON.stringify(data));
+      alert("Game Saved!");
+    }
+
+    // Hook up menu and UI button events
+    document.getElementById('newGameButton').addEventListener('click', newGame);
+    document.getElementById('loadGameButton').addEventListener('click', loadGame);
+    document.getElementById('saveButton').addEventListener('click', () => {
+      if (gameState === 'playing') saveGame();
+    });
+    document.getElementById('menuButton').addEventListener('click', () => {
+      gameState = 'menu';
+      document.getElementById('mainMenu').style.display = 'flex';
+    });
+
+    // Keyboard event listeners
+    window.addEventListener('keydown', (e) => {
+      keys[e.key] = true;
+      // If space is pressed during gameplay, trigger an attack
+      if (e.key === ' ' && gameState === 'playing') {
+        if (player.attack()) {
+          // Remove any enemy within attack range
+          enemies = enemies.filter(enemy => {
+            let dx = enemy.x - player.x;
+            let dy = enemy.y - player.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+            return dist > player.attackRange + enemy.radius;
+          });
+        }
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      keys[e.key] = false;
+    });
+
+    // The main game loop using requestAnimationFrame
+    function gameLoop(timestamp) {
+      if (!lastTime) lastTime = timestamp;
+      let delta = timestamp - lastTime;
+      lastTime = timestamp;
+
+      if (gameState === 'playing') {
+        update(delta);
+        draw();
+      }
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Update game objects
+    function update(delta) {
+      player.update(delta);
+      enemies.forEach(enemy => enemy.update(delta, player));
+
+      // If an enemy touches the player, reduce player health gradually
+      enemies.forEach(enemy => {
+        let dx = enemy.x - player.x;
+        let dy = enemy.y - player.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < enemy.radius + player.radius) {
+          player.health -= 0.05 * delta;
+        }
+      });
+      // Remove enemies with no health (attack immediately removes them in this example)
+      enemies = enemies.filter(enemy => enemy.health > 0);
+
+      // Periodically spawn new enemies near the player (but not too close)
+      enemySpawnTimer += delta;
+      if (enemySpawnTimer >= enemySpawnInterval) {
+        enemySpawnTimer = 0;
+        let angle = Math.random() * Math.PI * 2;
+        let distance = 100 + Math.random() * 200;
+        let ex = player.x + Math.cos(angle) * distance;
+        let ey = player.y + Math.sin(angle) * distance;
+        // Clamp to world boundaries
+        ex = Math.max(0, Math.min(WORLD_PIXEL_WIDTH, ex));
+        ey = Math.max(0, Math.min(WORLD_PIXEL_HEIGHT, ey));
+        enemies.push(new Enemy(ex, ey));
+      }
+      // Update the UI: display player coordinates
+      document.getElementById('playerCoords').innerText = `X: ${Math.floor(player.x)}, Y: ${Math.floor(player.y)}`;
+    }
+
+    // Draw the world, enemies, and player
     function draw() {
+      // Calculate camera offset so that the player is centered
+      let offsetX = player.x - canvas.width / 2;
+      let offsetY = player.y - canvas.height / 2;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawBricks();
-      drawBall();
-      drawPaddle();
-      collisionDetection();
-
-      // Bounce off left and right walls
-      if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) {
-        dx = -dx;
-      }
-      // Bounce off the top wall
-      if (y + dy < ballRadius) {
-        dy = -dy;
-      } else if (y + dy > canvas.height - ballRadius) {
-        // Check for paddle collision
-        if (x > paddleX && x < paddleX + paddleWidth) {
-          dy = -dy;
-        } else {
-          alert("Game Over!");
-          document.location.reload();
-        }
-      }
-
-      // Move the ball
-      x += dx;
-      y += dy;
-
-      // Move the paddle with keyboard controls
-      if (rightPressed && paddleX < canvas.width - paddleWidth) {
-        paddleX += 7;
-      } else if (leftPressed && paddleX > 0) {
-        paddleX -= 7;
-      }
-
-      requestAnimationFrame(draw);
+      world.draw(ctx, offsetX, offsetY);
+      enemies.forEach(enemy => enemy.draw(ctx, offsetX, offsetY));
+      player.draw(ctx, offsetX, offsetY);
+      // Optionally, draw player's health
+      ctx.fillStyle = 'black';
+      ctx.font = '20px Arial';
+      ctx.fillText(`Health: ${Math.floor(player.health)}`, 20, 30);
     }
 
     // Start the game loop
-    draw();
+    requestAnimationFrame(gameLoop);
   </script>
 </body>
 </html>
